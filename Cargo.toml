@@ -1,0 +1,37 @@
+[package]
+name = "picture_frame_calc"
+version = "0.1.0"
+authors = ["Steven Lovegrove <stevenlovegrove@gmail.com>"]
+edition = "2021"
+rust-version = "1.65"
+
+
+[dependencies]
+egui = "0.28"
+image = "0.25"
+eframe = { version = "0.28", default-features = false, features = [
+    "default_fonts",
+    "glow",
+] }
+rfd = "0.13"
+log = "0.4.19"
+nalgebra = "0.32.3"
+anyhow = "1.0"
+ehttp = "0.5.0"
+
+# native:
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tracing-subscriber = "0.3"
+futures = "0.3.28"
+
+# web:
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen-futures = "0.4"
+
+
+[profile.release]
+opt-level = 2 # fast and small wasm
+
+# Optimize all dependencies even in debug builds:
+[profile.dev.package."*"]
+opt-level = 2
