@@ -1820,6 +1820,7 @@ dependencies = [
  "image",
  "log",
  "nalgebra",
+ "num-traits",
  "rfd",
  "tracing-subscriber",
  "wasm-bindgen-futures",

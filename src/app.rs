@@ -1,37 +1,179 @@
+use egui::emath::Numeric;
 use egui::{Color32, Context, Image, Mesh, Pos2, Rect, Shape, Stroke, Vec2};
 use nalgebra::{DMatrix, DVector, Matrix3, Vector3};
-use std::fmt;
+use num_traits::Float;
+use std::fmt::{self, Display};
 use std::future::Future;
+use std::str::FromStr;
 use std::sync::mpsc::{channel, Receiver, Sender};
 
 #[derive(Clone, Copy, Debug)]
-pub struct Length {
-    value: f64,
-    unit: LengthUnit,
+pub struct Length<T: Float> {
+    pub value: T,
+    pub unit: LengthUnit,
 }
 
-impl Length {
-    pub fn new(value: f64, unit: LengthUnit) -> Self {
+impl<T: Float> Length<T> {
+    pub fn new(value: T, unit: LengthUnit) -> Self {
         Self { value, unit }
     }
 
-    pub fn to_mm(&self) -> f64 {
+    pub fn to_unit(&self, unit: LengthUnit) -> Self {
+        let mm = self.to_mm();
+        Self::from_mm(mm, unit)
+    }
+
+    pub fn to_custom_unit(&self, unit_per_mm: T) -> T {
+        let mm = self.to_mm();
+        mm * unit_per_mm
+    }
+
+    pub fn to_mm(&self) -> T {
         match self.unit {
-            LengthUnit::Meters => self.value * 1000.0,
-            LengthUnit::Centimeters => self.value * 10.0,
+            LengthUnit::Meters => self.value * T::from(1000.0).unwrap(),
+            LengthUnit::Centimeters => self.value * T::from(10.0).unwrap(),
             LengthUnit::Millimeters => self.value,
-            LengthUnit::InchesDecimal | LengthUnit::InchesFractional => self.value * 25.4,
+            LengthUnit::InchesDecimal | LengthUnit::InchesFractional => {
+                self.value * T::from(25.4).unwrap()
+            }
         }
     }
 
-    pub fn from_mm(mm: f64, unit: LengthUnit) -> Self {
+    pub fn from_mm(mm: T, unit: LengthUnit) -> Self {
         let value = match unit {
-            LengthUnit::Meters => mm / 1000.0,
-            LengthUnit::Centimeters => mm / 10.0,
+            LengthUnit::Meters => mm / T::from(1000.0).unwrap(),
+            LengthUnit::Centimeters => mm / T::from(10.0).unwrap(),
             LengthUnit::Millimeters => mm,
-            LengthUnit::InchesDecimal | LengthUnit::InchesFractional => mm / 25.4,
+            LengthUnit::InchesDecimal | LengthUnit::InchesFractional => mm / T::from(25.4).unwrap(),
         };
         Self { value, unit }
+    }
+
+    pub fn cast<U: Float>(self) -> Length<U> {
+        Length::<U> {
+            value: U::from(self.to_mm()).unwrap(),
+            unit: self.unit,
+        }
+    }
+}
+
+impl<T: Float> std::ops::Add for Length<T> {
+    type Output = Length<T>;
+
+    fn add(self, other: Self) -> Self::Output {
+        let other_mm = other.to_mm();
+        let result_mm = self.to_mm() + other_mm;
+        Length::from_mm(result_mm, self.unit)
+    }
+}
+
+impl<T: Float> std::ops::Sub for Length<T> {
+    type Output = Length<T>;
+
+    fn sub(self, other: Self) -> Self::Output {
+        let other_mm = other.to_mm();
+        let result_mm = self.to_mm() - other_mm;
+        Length::from_mm(result_mm, self.unit)
+    }
+}
+
+impl<T: Float> std::ops::Mul<T> for Length<T> {
+    type Output = Length<T>;
+
+    fn mul(self, scalar: T) -> Self::Output {
+        Self {
+            value: self.value * scalar,
+            unit: self.unit,
+        }
+    }
+}
+
+impl<T: Float> std::ops::Div<T> for Length<T> {
+    type Output = Length<T>;
+
+    fn div(self, scalar: T) -> Self::Output {
+        Self {
+            value: self.value / scalar,
+            unit: self.unit,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct LengthVec<T: Float, const N: usize> {
+    values: [Length<T>; N],
+}
+
+impl<T: Float, const N: usize> LengthVec<T, N> {
+    pub fn new(values: [T; N], unit: LengthUnit) -> Self {
+        let values = values.map(|v| Length::new(v, unit));
+        Self { values }
+    }
+
+    pub fn to_unit(&self, unit: LengthUnit) -> Self {
+        Self {
+            values: self.values.map(|v| v.to_unit(unit)),
+        }
+    }
+
+    pub fn to_mm(&self) -> [T; N] {
+        self.values.map(|v| v.to_mm())
+    }
+
+    pub fn from_mm(mm: [T; N], unit: LengthUnit) -> Self {
+        Self {
+            values: mm.map(|v| Length::from_mm(v, unit)),
+        }
+    }
+
+    pub fn to_custom_unit(&self, unit_per_mm: T) -> [T; N] {
+        self.values.map(|v| v.to_custom_unit(unit_per_mm))
+    }
+
+    pub fn cast<U: Float>(self) -> LengthVec<U, N> {
+        LengthVec::<U, N> {
+            values: self.values.map(|v| v.cast()),
+        }
+    }
+}
+
+impl<T: Float, const N: usize> std::ops::Add for LengthVec<T, N> {
+    type Output = LengthVec<T, N>;
+
+    fn add(self, other: Self) -> Self::Output {
+        Self {
+            values: std::array::from_fn(|i| self.values[i] + other.values[i]),
+        }
+    }
+}
+
+impl<T: Float, const N: usize> std::ops::Sub for LengthVec<T, N> {
+    type Output = LengthVec<T, N>;
+
+    fn sub(self, other: Self) -> Self::Output {
+        Self {
+            values: std::array::from_fn(|i| self.values[i] - other.values[i]),
+        }
+    }
+}
+
+impl<T: Float, const N: usize> std::ops::Mul<T> for LengthVec<T, N> {
+    type Output = LengthVec<T, N>;
+
+    fn mul(self, scalar: T) -> Self::Output {
+        Self {
+            values: self.values.map(|v| v * scalar),
+        }
+    }
+}
+
+impl<T: Float, const N: usize> std::ops::Div<T> for LengthVec<T, N> {
+    type Output = LengthVec<T, N>;
+
+    fn div(self, scalar: T) -> Self::Output {
+        Self {
+            values: self.values.map(|v| v / scalar),
+        }
     }
 }
 
@@ -40,16 +182,17 @@ pub struct PictureFrame {
     texture: Option<egui::TextureHandle>,
     matte_color: Color32,
     frame_color: Color32,
-    picture_size: (Length, Length),
-    glass_size: (Length, Length),
-    glass_frame_lip: Length,
-    picture_offset: (Length, Length),
-    matte_hole_size: (Length, Length),
-    frame_width: Length,
-    frame_depth: Length,
-    thickness_glass: Length,
-    thickness_matte: Length,
-    thickness_backing: Length,
+    picture_size: LengthVec<f64, 2>,
+    glass_size: LengthVec<f64, 2>,
+    glass_frame_lip: Length<f64>,
+    glass_frame_tol: Length<f64>,
+    picture_offset: LengthVec<f64, 2>,
+    matte_hole_size: LengthVec<f64, 2>,
+    frame_width: Length<f64>,
+    frame_depth: Length<f64>,
+    thickness_glass: Length<f64>,
+    thickness_matte: Length<f64>,
+    thickness_backing: Length<f64>,
 }
 
 pub struct PictureFrameApp {
@@ -132,23 +275,23 @@ impl LengthUnit {
     }
 }
 
-pub struct ImperialDragValue<'a> {
-    value: &'a mut Length,
-    speed: f64,
+pub struct ImperialDragValue<'a, T: Float> {
+    value: &'a mut Length<T>,
+    speed: T,
     _id: String,
 }
 
-impl<'a> ImperialDragValue<'a> {
-    pub fn new(value: &'a mut Length, id: impl Into<String>) -> Self {
+impl<'a, T: Float + Display + FromStr + Numeric> ImperialDragValue<'a, T> {
+    pub fn new(value: &'a mut Length<T>, id: impl Into<String>) -> Self {
         Self {
             value,
-            speed: 0.1,
+            speed: T::from(0.1).unwrap(),
             _id: id.into(),
         }
     }
 
-    pub fn speed(mut self, speed_mm: f64) -> Self {
-        self.speed = speed_mm / self.value.unit.to_mm_factor();
+    pub fn speed(mut self, speed_mm: T) -> Self {
+        self.speed = speed_mm / T::from(self.value.unit.to_mm_factor()).unwrap();
         self
     }
 
@@ -163,12 +306,15 @@ impl<'a> ImperialDragValue<'a> {
                 let whole_inches = inches.floor();
                 let fraction = inches - whole_inches;
                 let denominator = 32;
-                let numerator = (fraction * denominator as f64).round() as i32;
+                let numerator = (fraction * T::from(denominator).unwrap())
+                    .round()
+                    .to_i32()
+                    .unwrap();
 
                 if numerator == 0 {
                     format!("{}", whole_inches)
                 } else if numerator == denominator {
-                    format!("{}", whole_inches + 1.0)
+                    format!("{}", whole_inches + T::from(1.0).unwrap())
                 } else {
                     // Simplify the fraction
                     let gcd = gcd(numerator, denominator);
@@ -183,7 +329,7 @@ impl<'a> ImperialDragValue<'a> {
         }
     }
 
-    fn parse_value(s: &str) -> Option<f64> {
+    fn parse_value(s: &str) -> Option<T> {
         let s = s.trim();
         let parts: Vec<&str> = s.split_whitespace().collect();
 
@@ -192,9 +338,9 @@ impl<'a> ImperialDragValue<'a> {
         }
 
         let whole = if parts[0].contains('.') {
-            parts[0].parse::<f64>().ok()?
+            parts[0].parse::<T>().ok()?
         } else {
-            parts[0].parse::<i32>().ok()? as f64
+            T::from(parts[0].parse::<i32>().ok()?).unwrap()
         };
 
         if parts.len() == 1 {
@@ -206,8 +352,8 @@ impl<'a> ImperialDragValue<'a> {
             return None;
         }
 
-        let numerator = fraction_parts[0].parse::<f64>().ok()?;
-        let denominator = fraction_parts[1].parse::<f64>().ok()?;
+        let numerator = fraction_parts[0].parse::<T>().ok()?;
+        let denominator = fraction_parts[1].parse::<T>().ok()?;
 
         Some(whole + numerator / denominator)
     }
@@ -224,9 +370,9 @@ impl<'a> ImperialDragValue<'a> {
 
                 let drag_response = ui.add(
                     egui::DragValue::new(&mut display_value)
-                        .speed(self.speed)
+                        .speed(self.speed.to_f64())
                         .custom_formatter(|_, _| self.format_value())
-                        .custom_parser(|s| Self::parse_value(s)),
+                        .custom_parser(|s| Self::parse_value(s).map(|v| v.to_f64())),
                 );
 
                 if drag_response.changed() {
@@ -307,22 +453,20 @@ impl eframe::App for PictureFrameApp {
                     )),
                     matte_color: Color32::WHITE,
                     frame_color: Color32::from_rgb(139, 69, 19),
-                    picture_size: (
-                        Length::new(100.0, LengthUnit::Millimeters),
-                        Length::new(100.0 / aspect_ratio, LengthUnit::Millimeters),
+                    picture_size: LengthVec::new(
+                        [100.0, 100.0 / aspect_ratio],
+                        LengthUnit::Millimeters,
                     ),
-                    glass_size: (
-                        Length::new(120.0, LengthUnit::Millimeters),
-                        Length::new(120.0 / aspect_ratio, LengthUnit::Millimeters),
+                    glass_size: LengthVec::new(
+                        [120.0, 120.0 / aspect_ratio],
+                        LengthUnit::Millimeters,
                     ),
                     glass_frame_lip: Length::new(5.0, LengthUnit::Millimeters),
-                    picture_offset: (
-                        Length::new(0.0, LengthUnit::Millimeters),
-                        Length::new(0.0, LengthUnit::Millimeters),
-                    ),
-                    matte_hole_size: (
-                        Length::new(100.0, LengthUnit::Millimeters),
-                        Length::new(100.0 / aspect_ratio, LengthUnit::Millimeters),
+                    glass_frame_tol: Length::new(0.0, LengthUnit::Millimeters),
+                    picture_offset: LengthVec::new([0.0, 0.0], LengthUnit::Millimeters),
+                    matte_hole_size: LengthVec::new(
+                        [100.0, 100.0 / aspect_ratio],
+                        LengthUnit::Millimeters,
                     ),
                     frame_width: Length::new(20.0, LengthUnit::Millimeters),
                     frame_depth: Length::new(20.0, LengthUnit::Millimeters),
@@ -358,27 +502,27 @@ impl eframe::App for PictureFrameApp {
                     ui.heading("Configuration");
 
                     egui::Grid::new("frame_dimensions")
-                        .num_columns(5) // Increased from 4 to 5
+                        .num_columns(5)
                         .spacing([2.0, 4.0])
                         .min_col_width(0.0)
                         .show(ui, |ui| {
                             ui.label("Picture size");
-                            ImperialDragValue::new(&mut frame.picture_size.0, "width")
+                            ImperialDragValue::new(&mut frame.picture_size.values[0], "width")
                                 .speed(0.1)
                                 .ui(ui);
                             ui.label("x");
-                            ImperialDragValue::new(&mut frame.picture_size.1, "height")
+                            ImperialDragValue::new(&mut frame.picture_size.values[1], "height")
                                 .speed(0.1)
                                 .ui(ui);
                             standard_size_menu_button(ui, &mut frame.picture_size);
                             ui.end_row();
 
                             ui.label("Glass size");
-                            ImperialDragValue::new(&mut frame.glass_size.0, "width")
+                            ImperialDragValue::new(&mut frame.glass_size.values[0], "width")
                                 .speed(0.1)
                                 .ui(ui);
                             ui.label("x");
-                            ImperialDragValue::new(&mut frame.glass_size.1, "height")
+                            ImperialDragValue::new(&mut frame.glass_size.values[1], "height")
                                 .speed(0.1)
                                 .ui(ui);
                             standard_size_menu_button(ui, &mut frame.glass_size);
@@ -386,14 +530,14 @@ impl eframe::App for PictureFrameApp {
 
                             ui.label("Matte hole size:");
                             ImperialDragValue::new(
-                                &mut frame.matte_hole_size.0,
+                                &mut frame.matte_hole_size.values[0],
                                 "matte_hole_size_width",
                             )
                             .speed(0.1)
                             .ui(ui);
                             ui.label("x");
                             ImperialDragValue::new(
-                                &mut frame.matte_hole_size.1,
+                                &mut frame.matte_hole_size.values[1],
                                 "matte_hole_size_height",
                             )
                             .speed(0.1)
@@ -402,18 +546,24 @@ impl eframe::App for PictureFrameApp {
                             ui.end_row();
 
                             ui.label("Picture offset");
-                            ImperialDragValue::new(&mut frame.picture_offset.0, "picture_offset_x")
-                                .speed(0.1)
-                                .ui(ui);
+                            ImperialDragValue::new(
+                                &mut frame.picture_offset.values[0],
+                                "picture_offset_x",
+                            )
+                            .speed(0.1)
+                            .ui(ui);
                             ui.label("x");
-                            ImperialDragValue::new(&mut frame.picture_offset.1, "picture_offset_y")
-                                .speed(0.1)
-                                .ui(ui);
+                            ImperialDragValue::new(
+                                &mut frame.picture_offset.values[1],
+                                "picture_offset_y",
+                            )
+                            .speed(0.1)
+                            .ui(ui);
                             if ui.button("🔄").clicked() {
-                                frame.picture_offset.0 =
-                                    Length::new(0.0, frame.picture_offset.0.unit);
-                                frame.picture_offset.1 =
-                                    Length::new(0.0, frame.picture_offset.1.unit);
+                                frame.picture_offset.values[0] =
+                                    Length::new(0.0, frame.picture_offset.values[0].unit);
+                                frame.picture_offset.values[1] =
+                                    Length::new(0.0, frame.picture_offset.values[1].unit);
                             }
                             ui.end_row();
 
@@ -429,6 +579,12 @@ impl eframe::App for PictureFrameApp {
 
                             ui.label("Glass frame lip:");
                             ImperialDragValue::new(&mut frame.glass_frame_lip, "glass_frame_lip")
+                                .speed(0.1)
+                                .ui(ui);
+                            ui.end_row();
+
+                            ui.label("Glass frame tolerance:");
+                            ImperialDragValue::new(&mut frame.glass_frame_tol, "glass_frame_tol")
                                 .speed(0.1)
                                 .ui(ui);
                             ui.end_row();
@@ -519,12 +675,12 @@ impl eframe::App for PictureFrameApp {
                                     updated_quad_points.map(|p| (p.x as f64, p.y as f64));
                                 let dst_points = [
                                     (0.0, 0.0),
-                                    (frame.picture_size.0.to_mm() as f64, 0.0),
+                                    (frame.picture_size.values[0].to_mm() as f64, 0.0),
                                     (
-                                        frame.picture_size.0.to_mm() as f64,
-                                        frame.picture_size.1.to_mm() as f64,
+                                        frame.picture_size.values[0].to_mm() as f64,
+                                        frame.picture_size.values[1].to_mm() as f64,
                                     ),
-                                    (0.0, frame.picture_size.1.to_mm() as f64),
+                                    (0.0, frame.picture_size.values[1].to_mm() as f64),
                                 ];
                                 let homography_result =
                                     compute_homography_from_points(&src_points, &dst_points);
@@ -555,6 +711,8 @@ impl eframe::App for PictureFrameApp {
                         render_frame_side_quad(ui, frame, self.pix_per_mm, FrameSide::Vertical);
                         ui.label("Profile");
                         render_frame_profile(ui, frame, self.pix_per_mm);
+                        ui.label("Matte");
+                        render_matte_profile(ui, frame, self.pix_per_mm);
                     }
 
                     // Update the quad points in self after the ui.horizontal() block
@@ -575,9 +733,11 @@ fn render_picture_frame(
     mm_from_pix: &Matrix3<f64>,
 ) -> egui::Response {
     let total_size_mm = (
-        frame.glass_size.0.to_mm()
+        frame.glass_size.values[0].to_mm()
+            + frame.glass_frame_tol.to_mm() * 2.0
             + 2.0 * (frame.frame_width.to_mm() - frame.glass_frame_lip.to_mm()),
-        frame.glass_size.1.to_mm()
+        frame.glass_size.values[1].to_mm()
+            + frame.glass_frame_tol.to_mm() * 2.0
             + 2.0 * (frame.frame_width.to_mm() - frame.glass_frame_lip.to_mm()),
     );
     let total_size_px = egui::Vec2::new(
@@ -593,12 +753,12 @@ fn render_picture_frame(
     ui.painter().rect_filled(total_rect, 0.0, frame.frame_color);
 
     let picture_offset_px = egui::Vec2::new(
-        (frame.picture_offset.0.to_mm() * pix_per_mm as f64) as f32,
-        (frame.picture_offset.1.to_mm() * pix_per_mm as f64) as f32,
+        (frame.picture_offset.values[0].to_mm() * pix_per_mm as f64) as f32,
+        (frame.picture_offset.values[1].to_mm() * pix_per_mm as f64) as f32,
     );
     let picture_size_pix = egui::Vec2::new(
-        (frame.picture_size.0.to_mm() * pix_per_mm as f64) as f32,
-        (frame.picture_size.1.to_mm() * pix_per_mm as f64) as f32,
+        (frame.picture_size.values[0].to_mm() * pix_per_mm as f64) as f32,
+        (frame.picture_size.values[1].to_mm() * pix_per_mm as f64) as f32,
     );
 
     let center_offset = (total_rect.size() - picture_size_pix) / 2.0;
@@ -626,8 +786,8 @@ fn render_picture_frame(
             ),
     };
     let matte_hole_size = egui::Vec2::new(
-        frame.matte_hole_size.0.to_mm() as f32 * pix_per_mm,
-        frame.matte_hole_size.1.to_mm() as f32 * pix_per_mm,
+        frame.matte_hole_size.values[0].to_mm() as f32 * pix_per_mm,
+        frame.matte_hole_size.values[1].to_mm() as f32 * pix_per_mm,
     );
     render_rect_with_hole(ui, matte_outer_rect, matte_hole_size, frame.matte_color);
 
@@ -682,8 +842,16 @@ fn render_frame_side_quad(
     let frame_width_px = frame.frame_width.to_mm() as f32 * pix_per_mm;
     let glass_edge_to_frame_edge_mm = frame.frame_width.to_mm() - frame.glass_frame_lip.to_mm();
     let frame_length_mm = match side {
-        FrameSide::Horizontal => frame.glass_size.0.to_mm() + 2.0 * glass_edge_to_frame_edge_mm,
-        FrameSide::Vertical => frame.glass_size.1.to_mm() + 2.0 * glass_edge_to_frame_edge_mm,
+        FrameSide::Horizontal => {
+            frame.glass_size.values[0].to_mm()
+                + frame.glass_frame_tol.to_mm() * 2.0
+                + 2.0 * glass_edge_to_frame_edge_mm
+        }
+        FrameSide::Vertical => {
+            frame.glass_size.values[1].to_mm()
+                + frame.glass_frame_tol.to_mm() * 2.0
+                + 2.0 * glass_edge_to_frame_edge_mm
+        }
     };
 
     let frame_length_px = frame_length_mm as f32 * pix_per_mm;
@@ -787,9 +955,11 @@ fn render_dimension_line(
     ui.painter()
         .line_segment([end, line_end], Stroke::new(1.0, Color32::LIGHT_GRAY));
 
+    let line_color = Color32::from_gray(150);
+
     // Draw the main line
     ui.painter()
-        .line_segment([line_start, line_end], Stroke::new(1.0, Color32::BLACK));
+        .line_segment([line_start, line_end], Stroke::new(1.0, line_color));
 
     // Draw arrow caps
     let arrow_size = 3.0;
@@ -797,31 +967,27 @@ fn render_dimension_line(
     let arrow2 = (direction - normal).normalized() * arrow_size;
     ui.painter().line_segment(
         [line_start, line_start + arrow1],
-        Stroke::new(1.0, Color32::BLACK),
+        Stroke::new(1.0, line_color),
     );
     ui.painter().line_segment(
         [line_start, line_start + arrow2],
-        Stroke::new(1.0, Color32::BLACK),
+        Stroke::new(1.0, line_color),
     );
-    ui.painter().line_segment(
-        [line_end, line_end - arrow1],
-        Stroke::new(1.0, Color32::BLACK),
-    );
-    ui.painter().line_segment(
-        [line_end, line_end - arrow2],
-        Stroke::new(1.0, Color32::BLACK),
-    );
+    ui.painter()
+        .line_segment([line_end, line_end - arrow1], Stroke::new(1.0, line_color));
+    ui.painter()
+        .line_segment([line_end, line_end - arrow2], Stroke::new(1.0, line_color));
 
     // Draw label
     let galley = ui
         .painter()
-        .layout_no_wrap(label.to_string(), font_id.clone(), Color32::BLACK);
+        .layout_no_wrap(label.to_string(), font_id.clone(), line_color);
     let label_pos = (line_start + line_end.to_vec2()) / 2.0
         + offset.signum()
             * (rect_width_in_direction(galley.rect, normal) / 2.0 + offset.abs() / 2.0)
             * normal
         - galley.rect.size() / 2.0;
-    ui.painter().galley(label_pos, galley, Color32::BLACK);
+    ui.painter().galley(label_pos, galley, line_color);
 }
 
 fn rect_width_in_direction(rect: Rect, normalized_direction: Vec2) -> f32 {
@@ -842,12 +1008,12 @@ fn render_warped_image(
 
         // 1. Transform from egui window pos to picture coords in mm
         let mm_from_window = Matrix3::new(
-            frame.picture_size.0.to_mm() as f64 / rect.width() as f64,
+            frame.picture_size.values[0].to_mm() as f64 / rect.width() as f64,
             0.0,
-            -frame.picture_size.0.to_mm() as f64 * rect.min.x as f64 / rect.width() as f64,
+            -frame.picture_size.values[0].to_mm() as f64 * rect.min.x as f64 / rect.width() as f64,
             0.0,
-            frame.picture_size.1.to_mm() as f64 / rect.height() as f64,
-            -frame.picture_size.1.to_mm() as f64 * rect.min.y as f64 / rect.height() as f64,
+            frame.picture_size.values[1].to_mm() as f64 / rect.height() as f64,
+            -frame.picture_size.values[1].to_mm() as f64 * rect.min.y as f64 / rect.height() as f64,
             0.0,
             0.0,
             1.0,
@@ -947,7 +1113,8 @@ fn render_frame_profile(
     // Calculate dimensions
     let frame_width_px = frame.frame_width.to_mm() as f32 * pix_per_mm;
     let frame_depth_px = frame.frame_depth.to_mm() as f32 * pix_per_mm;
-    let glass_frame_lip_px = frame.glass_frame_lip.to_mm() as f32 * pix_per_mm;
+    let glass_frame_lip_px =
+        (frame.glass_frame_lip.to_mm() + frame.glass_frame_tol.to_mm()) as f32 * pix_per_mm;
     let gap_depth_mm = frame.frame_depth.to_mm()
         - frame.thickness_glass.to_mm()
         - frame.thickness_matte.to_mm()
@@ -1006,7 +1173,7 @@ fn render_frame_profile(
     );
 
     // Dim: gap depth
-    let point_offset = Vec2::new(frame_width_px + padding, 0.0);
+    let point_offset = Vec2::new(frame_width_px + 2.0 * padding, 0.0);
     render_dimension_line(
         ui,
         points[4] + point_offset,
@@ -1023,15 +1190,138 @@ fn render_frame_profile(
         points[4] + point_offset,
         points[5] + point_offset,
         padding / 2.0,
-        &format!("{:.1} {}", frame.glass_frame_lip.to_mm(), "mm"),
+        &format!(
+            "{:.1} {}",
+            frame.glass_frame_lip.to_mm() + frame.glass_frame_tol.to_mm(),
+            "mm"
+        ),
         &font_id,
     );
 
     response
 }
 
+fn render_matte_profile(
+    ui: &mut egui::Ui,
+    frame: &PictureFrame,
+    pix_per_mm: f32,
+) -> egui::Response {
+    let matte_size_px = Vec2::new(
+        frame.glass_size.values[0].to_mm() as f32 * pix_per_mm,
+        frame.glass_size.values[1].to_mm() as f32 * pix_per_mm,
+    );
+    let matte_hole_size_px = Vec2::new(
+        frame.matte_hole_size.values[0].to_mm() as f32 * pix_per_mm,
+        frame.matte_hole_size.values[1].to_mm() as f32 * pix_per_mm,
+    );
+
+    let padding = 20.0;
+    let padding_vec = Vec2::new(padding, padding);
+    let widget_size = matte_size_px + 2.0 * padding_vec;
+    let (rect, response) = ui.allocate_exact_size(widget_size, egui::Sense::hover());
+
+    // Define the points of the profile
+    let origin = rect.left_top() + padding_vec;
+    let pts_outside = [
+        origin,
+        origin + Vec2::new(matte_size_px.x, 0.0),
+        origin + Vec2::new(matte_size_px.x, matte_size_px.y),
+        origin + Vec2::new(0.0, matte_size_px.y),
+        origin,
+    ];
+
+    let border = (frame.glass_size - frame.matte_hole_size) / 2.0;
+    let border_px = border.cast::<f32>().to_custom_unit(pix_per_mm);
+    let origin = rect.left_top() + padding_vec + border_px.into();
+    let pts_inside = [
+        origin,
+        origin + Vec2::new(matte_hole_size_px.x, 0.0),
+        origin + Vec2::new(matte_hole_size_px.x, matte_hole_size_px.y),
+        origin + Vec2::new(0.0, matte_hole_size_px.y),
+        origin,
+    ];
+
+    // Render dimension lines and labels
+    let text_style = egui::TextStyle::Small;
+    let font_id = ui.style().text_styles[&text_style].clone();
+
+    // Dim: matte width
+    render_dimension_line(
+        ui,
+        pts_outside[0],
+        pts_outside[1],
+        padding / 2.0,
+        &format!("{:.1} {}", frame.glass_size.values[0].to_mm(), "mm"),
+        &font_id,
+    );
+
+    // Dim: matte height
+    render_dimension_line(
+        ui,
+        pts_outside[1],
+        pts_outside[2],
+        padding / 2.0,
+        &format!("{:.1} {}", frame.glass_size.values[1].to_mm(), "mm"),
+        &font_id,
+    );
+
+    // Dim: matte hole width
+    render_dimension_line(
+        ui,
+        pts_inside[0],
+        pts_inside[1],
+        -padding / 2.0,
+        &format!("{:.1} {}", frame.matte_hole_size.values[0].to_mm(), "mm"),
+        &font_id,
+    );
+
+    // Dim: matte hole height
+    render_dimension_line(
+        ui,
+        pts_inside[1],
+        pts_inside[2],
+        -padding / 2.0,
+        &format!("{:.1} {}", frame.matte_hole_size.values[1].to_mm(), "mm"),
+        &font_id,
+    );
+
+    // Dim: top border
+    render_dimension_line(
+        ui,
+        pts_outside[1],
+        pts_outside[1] + Vec2::new(0.0, border_px[1]),
+        2.0 * padding / 2.0,
+        &format!("{:.1} {}", border.values[1].to_mm(), "mm"),
+        &font_id,
+    );
+
+    // Dim: left border
+    render_dimension_line(
+        ui,
+        pts_outside[3],
+        pts_outside[3] + Vec2::new(border_px[0], 0.0),
+        -padding / 2.0,
+        &format!("{:.1} {}", border.values[0].to_mm(), "mm"),
+        &font_id,
+    );
+
+    // Render the outside
+    ui.painter().add(Shape::line(
+        pts_outside.to_vec(),
+        Stroke::new(1.0, Color32::BLACK),
+    ));
+
+    // Render the inside
+    ui.painter().add(Shape::line(
+        pts_inside.to_vec(),
+        Stroke::new(1.0, Color32::BLACK),
+    ));
+
+    response
+}
+
 // Add this helper function outside of the impl block
-fn standard_size_menu_button(ui: &mut egui::Ui, size: &mut (Length, Length)) {
+fn standard_size_menu_button(ui: &mut egui::Ui, size: &mut LengthVec<f64, 2>) {
     ui.menu_button("📏", |ui| {
         for (label, width, height) in [
             ("4x6\"", 4.0, 6.0),
@@ -1040,10 +1330,7 @@ fn standard_size_menu_button(ui: &mut egui::Ui, size: &mut (Length, Length)) {
             ("11x14\"", 11.0, 14.0),
         ] {
             if ui.button(label).clicked() {
-                *size = (
-                    Length::new(width, LengthUnit::InchesFractional),
-                    Length::new(height, LengthUnit::InchesFractional),
-                );
+                *size = LengthVec::new([width, height], LengthUnit::InchesFractional);
                 ui.close_menu();
             }
         }
